@@ -1,6 +1,51 @@
 from ortools.sat.python import cp_model
 from datetime import datetime, timedelta
 from collections import defaultdict
+import csv
+import os
+
+
+def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2):
+    """
+    Parse availability CSV and convert to block/week constraints.
+    
+    CSV format: engineer,start_date,end_date
+    Example: Diana,2025-11-24,2025-11-30
+    
+    Args:
+        csv_path: path to CSV file
+        schedule_start_date: first Monday of the schedule
+        num_blocks: total number of 12-week blocks
+    
+    Returns:
+        dict mapping (engineer, block, week) to False for unavailable periods
+    """
+    if not os.path.exists(csv_path):
+        return {}
+    
+    constraints = {}
+    total_weeks = num_blocks * 12
+    
+    with open(csv_path, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            engineer = row['engineer'].strip()
+            start = datetime.strptime(row['start_date'].strip(), '%Y-%m-%d')
+            end = datetime.strptime(row['end_date'].strip(), '%Y-%m-%d')
+            
+            # Find which weeks this date range overlaps
+            for week_idx in range(total_weeks):
+                week_start = schedule_start_date + timedelta(weeks=week_idx)
+                week_end = week_start + timedelta(days=6)
+                
+                # Check if unavailable period overlaps this week
+                if start <= week_end and end >= week_start:
+                    block = week_idx // 12
+                    week_in_block = week_idx % 12
+                    constraints[(engineer, block, week_in_block)] = False
+    
+    return constraints
+
 
 def generate_on_call_schedule(start_date=None, availability_overrides=None, print_output=True):
     """
@@ -131,15 +176,18 @@ def generate_on_call_schedule(start_date=None, availability_overrides=None, prin
         if print_output:
             print("✅ Feasible schedule found!\n")
             # Print the formatted schedule
-            header = f"{'Week':<6} | {'Day':<10} | {'Night Primary':<15} | {'Night Secondary':<15}"
+            header = f"{'Week':<6} | {'Dates':<13} | {'Day':<10} | {'Night Primary':<15} | {'Night Secondary':<15}"
             print(header)
             print("-" * len(header))
             
             for w in range(num_weeks):
+                week_start = start_date + timedelta(weeks=w)
+                week_end = week_start + timedelta(days=6)
+                date_range = f"{week_start.strftime('%b %d')}-{week_end.strftime('%d')}"
                 day_eng = schedule[w]['D']
                 np_eng = schedule[w]['NP']
                 ns_eng = schedule[w]['NS']
-                print(f"{(w+1):<6} | {day_eng:<10} | {np_eng:<15} | {ns_eng:<15}")
+                print(f"{(w+1):<6} | {date_range:<13} | {day_eng:<10} | {np_eng:<15} | {ns_eng:<15}")
         
         return schedule
 
@@ -165,7 +213,7 @@ def generate_on_call_schedule(start_date=None, availability_overrides=None, prin
         return None
 
 
-def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_overrides=None):
+def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_overrides=None, availability_csv=None):
     """
     Generates a multi-block schedule (e.g., 24 weeks = 2 blocks of 12 weeks).
     
@@ -173,12 +221,20 @@ def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_ov
         num_blocks: number of 12-week blocks to schedule
         start_date: datetime object for the first Monday of block 1
         availability_overrides: dict mapping (engineer, block_idx, week) to False
+        availability_csv: path to CSV file with unavailability dates
     
     Returns:
         list of schedule dicts, one per block
     """
     if start_date is None:
         start_date = datetime(2025, 11, 3)
+    
+    # Parse CSV if provided and merge with overrides
+    if availability_csv:
+        csv_constraints = parse_availability_csv(availability_csv, start_date, num_blocks)
+        if availability_overrides:
+            csv_constraints.update(availability_overrides)
+        availability_overrides = csv_constraints
     
     schedules = []
     boundary_constraints = {}
@@ -225,4 +281,4 @@ def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_ov
 
 
 if __name__ == '__main__':
-    generate_multi_block_schedule()
+    generate_multi_block_schedule(availability_csv='availability.csv')
