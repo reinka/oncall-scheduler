@@ -5,6 +5,9 @@ import csv
 import os
 import yaml
 
+# Constants
+SEPARATOR = '=' * 60
+
 
 def load_config(config_path='config.yaml'):
     """Load configuration from YAML file."""
@@ -430,9 +433,9 @@ def generate_multi_block_schedule(config):
     boundary_constraints = {}
     
     for block_idx in range(num_blocks):
-        print(f"\n{'='*60}")
+        print(f"\n{SEPARATOR}")
         print(f"BLOCK {block_idx + 1} (Weeks {block_idx*weeks_per_block + 1}-{(block_idx+1)*weeks_per_block})")
-        print(f"{'='*60}\n")
+        print(f"{SEPARATOR}\n")
         
         # Calculate start date for this block
         block_start = start_date + timedelta(weeks=weeks_per_block * block_idx)
@@ -478,9 +481,9 @@ def generate_multi_block_schedule(config):
     
     # Export if requested
     if export_formats and schedules:
-        print(f"\n{'='*60}")
+        print(f"\n{SEPARATOR}")
         print("EXPORTING SCHEDULE")
-        print(f"{'='*60}\n")
+        print(f"{SEPARATOR}\n")
         
         if 'csv' in export_formats:
             export_schedule_csv(schedules, start_date, roles, role_definitions, weeks_per_block)
