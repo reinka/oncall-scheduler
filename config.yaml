@@ -16,7 +16,8 @@ team:
 
 schedule:
   start_date: "2025-11-03"  # First Monday
-  num_blocks: 2              # Number of 12-week blocks
+  num_blocks: 2              # Number of scheduling blocks
+  weeks_per_block: 12        # Weeks per block
 
 roles:
   - D    # Day shift
@@ -26,6 +27,7 @@ roles:
 constraints:
   max_shifts_per_engineer: 3
   max_weekends_per_engineer: 1
+  weekend_role: NP  # Which role includes weekend coverage
 
 rules:
   roster_completeness: true       # C1: Each role filled exactly once per week
@@ -34,6 +36,9 @@ rules:
   weekend_limit: true             # C4: Limit weekend shifts per engineer
   role_separation: true           # C5: One role per person per week
   availability: true              # C6: Respect unavailability
+
+solver:
+  timeout_seconds: 60  # Maximum time for solver
 
 files:
   availability_csv: "availability.csv"

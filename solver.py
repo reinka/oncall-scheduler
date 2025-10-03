@@ -12,7 +12,7 @@ def load_config(config_path='config.yaml'):
         return yaml.safe_load(f)
 
 
-def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2):
+def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2, weeks_per_block=12):
     """
     Parse availability CSV and convert to block/week constraints.
     
@@ -22,7 +22,8 @@ def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2):
     Args:
         csv_path: path to CSV file
         schedule_start_date: first Monday of the schedule
-        num_blocks: total number of 12-week blocks
+        num_blocks: total number of blocks
+        weeks_per_block: weeks per block
     
     Returns:
         dict mapping (engineer, block, week) to False for unavailable periods
@@ -31,7 +32,7 @@ def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2):
         return {}
     
     constraints = {}
-    total_weeks = num_blocks * 12
+    total_weeks = num_blocks * weeks_per_block
     
     with open(csv_path, 'r') as f:
         reader = csv.DictReader(f)
@@ -47,8 +48,8 @@ def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2):
                 
                 # Check if unavailable period overlaps this week
                 if start <= week_end and end >= week_start:
-                    block = week_idx // 12
-                    week_in_block = week_idx % 12
+                    block = week_idx // weeks_per_block
+                    week_in_block = week_idx % weeks_per_block
                     constraints[(engineer, block, week_in_block)] = False
     
     return constraints
@@ -77,11 +78,11 @@ def add_max_workload(model, x, engineers, roles, num_weeks, max_shifts):
         model.Add(total_shifts <= max_shifts)
 
 
-def add_weekend_limit(model, x, engineers, num_weeks, max_weekends):
-    """C4: Each engineer covers at most max_weekends (Night Primary shifts)."""
+def add_weekend_limit(model, x, engineers, num_weeks, max_weekends, weekend_role):
+    """C4: Each engineer covers at most max_weekends in the weekend role."""
     for e in engineers:
-        total_np_shifts = sum(x[(e, w, 'NP')] for w in range(num_weeks))
-        model.Add(total_np_shifts <= max_weekends)
+        total_weekend_shifts = sum(x[(e, w, weekend_role)] for w in range(num_weeks))
+        model.Add(total_weekend_shifts <= max_weekends)
 
 
 def add_role_separation(model, x, engineers, roles, num_weeks):
@@ -100,16 +101,19 @@ def add_availability(model, x, engineers, roles, num_weeks, availability):
                     model.Add(x[(e, w, r)] == 0)
 
 
-def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_weekends=1, availability_overrides=None, active_rules=None, print_output=True):
+def generate_on_call_schedule(engineers, roles, start_date, num_weeks=12, max_shifts=3, max_weekends=1, weekend_role='NP', solver_timeout=60.0, availability_overrides=None, active_rules=None, print_output=True):
     """
-    Generates and prints a 12-week on-call schedule.
+    Generates and prints an on-call schedule.
     
     Args:
         engineers: list of engineer names
         roles: list of role codes (e.g., ['D', 'NP', 'NS'])
         start_date: datetime object for the first Monday
-        max_shifts: maximum shifts per engineer in 12 weeks
-        max_weekends: maximum weekend shifts (NP) per engineer
+        num_weeks: number of weeks in the schedule block
+        max_shifts: maximum shifts per engineer in the period
+        max_weekends: maximum weekend shifts per engineer
+        weekend_role: which role represents weekend coverage
+        solver_timeout: maximum solver time in seconds
         availability_overrides: dict mapping (engineer, week) to False for unavailable weeks
         active_rules: dict of rule names to bool (which constraints to apply)
         print_output: whether to print the schedule (default: True)
@@ -121,7 +125,6 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
     # 1. INPUTS
     # =================================================================
     num_engineers = len(engineers)
-    num_weeks = 12
 
     # Availability: True if available, False if not.
     availability = {}
@@ -133,11 +136,6 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
     if availability_overrides:
         for (e, w), is_available in availability_overrides.items():
             availability[(e, w)] = is_available
-    else:
-        # Example: Diana is on vacation in Week 4 (week index 3)
-        availability[('Diana', 3)] = False
-        # Example: Bob is at a conference in Week 7 (week index 6)
-        availability[('Bob', 6)] = False
 
 
     # =================================================================
@@ -174,7 +172,7 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
         'roster_completeness': lambda: add_roster_completeness(model, x, engineers, roles, num_weeks),
         'no_consecutive_weeks': lambda: add_no_consecutive_weeks(model, x, engineers, roles, num_weeks),
         'max_workload': lambda: add_max_workload(model, x, engineers, roles, num_weeks, max_shifts),
-        'weekend_limit': lambda: add_weekend_limit(model, x, engineers, num_weeks, max_weekends),
+        'weekend_limit': lambda: add_weekend_limit(model, x, engineers, num_weeks, max_weekends, weekend_role),
         'role_separation': lambda: add_role_separation(model, x, engineers, roles, num_weeks),
         'availability': lambda: add_availability(model, x, engineers, roles, num_weeks, availability)
     }
@@ -189,7 +187,7 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
     # 4. SOLVE
     # =================================================================
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 60.0
+    solver.parameters.max_time_in_seconds = solver_timeout
     status = solver.Solve(model)
 
 
@@ -209,7 +207,8 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
         if print_output:
             print("✅ Feasible schedule found!\n")
             # Print the formatted schedule
-            header = f"{'Week':<6} | {'Dates':<13} | {'Day':<10} | {'Night Primary':<15} | {'Night Secondary':<15}"
+            role_columns = ' | '.join([f"{r:<10}" for r in roles])
+            header = f"{'Week':<6} | {'Dates':<13} | {role_columns}"
             print(header)
             print("-" * len(header))
             
@@ -217,10 +216,8 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
                 week_start = start_date + timedelta(weeks=w)
                 week_end = week_start + timedelta(days=6)
                 date_range = f"{week_start.strftime('%b %d')}-{week_end.strftime('%d')}"
-                day_eng = schedule[w]['D']
-                np_eng = schedule[w]['NP']
-                ns_eng = schedule[w]['NS']
-                print(f"{(w+1):<6} | {date_range:<13} | {day_eng:<10} | {np_eng:<15} | {ns_eng:<15}")
+                role_values = ' | '.join([f"{schedule[w][r]:<10}" for r in roles])
+                print(f"{(w+1):<6} | {date_range:<13} | {role_values}")
         
         return schedule
 
@@ -247,44 +244,47 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
         return None
 
 
-def export_schedule_csv(schedules, start_date, output_path='schedule.csv'):
+def export_schedule_csv(schedules, start_date, roles, weeks_per_block=12, output_path='schedule.csv'):
     """
     Export schedule to CSV format.
     
     Args:
         schedules: list of schedule dicts (one per block)
         start_date: datetime object for the first Monday
+        roles: list of role codes
+        weeks_per_block: weeks per block
         output_path: path to output CSV file
     """
     with open(output_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Week', 'Start Date', 'End Date', 'Day', 'Night Primary', 'Night Secondary'])
+        header = ['Week', 'Start Date', 'End Date'] + roles
+        writer.writerow(header)
         
         for block_idx, schedule in enumerate(schedules):
             for week in sorted(schedule.keys()):
-                abs_week = block_idx * 12 + week + 1
-                week_start = start_date + timedelta(weeks=block_idx * 12 + week)
+                abs_week = block_idx * weeks_per_block + week + 1
+                week_start = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
                 week_end = week_start + timedelta(days=6)
                 
-                writer.writerow([
+                row = [
                     abs_week,
                     week_start.strftime('%Y-%m-%d'),
-                    week_end.strftime('%Y-%m-%d'),
-                    schedule[week]['D'],
-                    schedule[week]['NP'],
-                    schedule[week]['NS']
-                ])
+                    week_end.strftime('%Y-%m-%d')
+                ] + [schedule[week][r] for r in roles]
+                writer.writerow(row)
     
     print(f"📄 Schedule exported to {output_path}")
 
 
-def export_schedule_ical(schedules, start_date, output_path='schedule.ics'):
+def export_schedule_ical(schedules, start_date, roles, weeks_per_block=12, output_path='schedule.ics'):
     """
     Export schedule to iCal format for calendar import.
     
     Args:
         schedules: list of schedule dicts (one per block)
         start_date: datetime object for the first Monday
+        roles: list of role codes
+        weeks_per_block: weeks per block
         output_path: path to output ICS file
     """
     lines = [
@@ -297,26 +297,20 @@ def export_schedule_ical(schedules, start_date, output_path='schedule.ics'):
         'X-WR-TIMEZONE:UTC',
     ]
     
-    role_names = {
-        'D': 'Day Shift',
-        'NP': 'Night Primary',
-        'NS': 'Night Secondary'
-    }
-    
     for block_idx, schedule in enumerate(schedules):
         for week in sorted(schedule.keys()):
-            week_start = start_date + timedelta(weeks=block_idx * 12 + week)
+            week_start = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
             week_end = week_start + timedelta(days=7)  # +7 for DTEND (exclusive)
             
-            for role, role_name in role_names.items():
+            for role in roles:
                 engineer = schedule[week][role]
                 
                 lines.extend([
                     'BEGIN:VEVENT',
                     f'DTSTART;VALUE=DATE:{week_start.strftime("%Y%m%d")}',
                     f'DTEND;VALUE=DATE:{week_end.strftime("%Y%m%d")}',
-                    f'SUMMARY:On-Call: {engineer} ({role_name})',
-                    f'DESCRIPTION:Engineer: {engineer}\\nRole: {role_name}',
+                    f'SUMMARY:On-Call: {engineer} ({role})',
+                    f'DESCRIPTION:Engineer: {engineer}\\nRole: {role}',
                     f'UID:{block_idx}-{week}-{role}@oncall',
                     'END:VEVENT',
                 ])
@@ -344,8 +338,11 @@ def generate_multi_block_schedule(config):
     roles = config['roles']
     start_date = datetime.strptime(config['schedule']['start_date'], '%Y-%m-%d')
     num_blocks = config['schedule']['num_blocks']
+    weeks_per_block = config['schedule'].get('weeks_per_block', 12)  # Default to 12
     max_shifts = config['constraints']['max_shifts_per_engineer']
     max_weekends = config['constraints']['max_weekends_per_engineer']
+    weekend_role = config['constraints'].get('weekend_role', 'NP')  # Default to 'NP'
+    solver_timeout = config.get('solver', {}).get('timeout_seconds', 60.0)  # Default to 60
     availability_csv = config['files']['availability_csv']
     export_formats = config['files']['export_formats']
     active_rules = config.get('rules', None)  # Optional rules section
@@ -354,7 +351,7 @@ def generate_multi_block_schedule(config):
     
     # Parse CSV if provided and merge with overrides
     if availability_csv:
-        csv_constraints = parse_availability_csv(availability_csv, start_date, num_blocks)
+        csv_constraints = parse_availability_csv(availability_csv, start_date, num_blocks, weeks_per_block)
         if availability_overrides:
             csv_constraints.update(availability_overrides)
         availability_overrides = csv_constraints
@@ -364,11 +361,11 @@ def generate_multi_block_schedule(config):
     
     for block_idx in range(num_blocks):
         print(f"\n{'='*60}")
-        print(f"BLOCK {block_idx + 1} (Weeks {block_idx*12 + 1}-{(block_idx+1)*12})")
+        print(f"BLOCK {block_idx + 1} (Weeks {block_idx*weeks_per_block + 1}-{(block_idx+1)*weeks_per_block})")
         print(f"{'='*60}\n")
         
         # Calculate start date for this block
-        block_start = start_date + timedelta(weeks=12 * block_idx)
+        block_start = start_date + timedelta(weeks=weeks_per_block * block_idx)
         
         # Merge availability: user overrides + boundary constraints
         block_availability = {}
@@ -385,8 +382,11 @@ def generate_multi_block_schedule(config):
             engineers=engineers,
             roles=roles,
             start_date=block_start,
+            num_weeks=weeks_per_block,
             max_shifts=max_shifts,
             max_weekends=max_weekends,
+            weekend_role=weekend_role,
+            solver_timeout=solver_timeout,
             availability_overrides=block_availability if block_availability else None,
             active_rules=active_rules,
             print_output=True
@@ -398,11 +398,12 @@ def generate_multi_block_schedule(config):
         
         schedules.append(schedule)
         
-        # Extract week 11 (last week) engineers for next block's boundary
+        # Extract last week engineers for next block's boundary
         if block_idx < num_blocks - 1:
             boundary_constraints = {}
-            for role in ['D', 'NP', 'NS']:
-                engineer = schedule[11][role]  # Week 11 is the last week (0-indexed)
+            last_week = weeks_per_block - 1  # 0-indexed
+            for role in roles:
+                engineer = schedule[last_week][role]
                 boundary_constraints[(engineer, 0)] = False  # Block next week 0
     
     # Export if requested
@@ -412,9 +413,9 @@ def generate_multi_block_schedule(config):
         print(f"{'='*60}\n")
         
         if 'csv' in export_formats:
-            export_schedule_csv(schedules, start_date)
+            export_schedule_csv(schedules, start_date, roles, weeks_per_block)
         if 'ical' in export_formats:
-            export_schedule_ical(schedules, start_date)
+            export_schedule_ical(schedules, start_date, roles, weeks_per_block)
     
     return schedules
 
