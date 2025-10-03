@@ -244,9 +244,9 @@ def generate_on_call_schedule(engineers, roles, start_date, num_weeks=12, max_sh
         return None
 
 
-def export_schedule_csv(schedules, start_date, roles, role_definitions, weeks_per_block=12, output_path='schedule.csv'):
+def generate_shift_events(schedules, start_date, roles, role_definitions, weeks_per_block=12):
     """
-    Export schedule to CSV format with detailed time information.
+    Generate individual shift events with exact start/end times.
     
     Args:
         schedules: list of schedule dicts (one per block)
@@ -254,93 +254,17 @@ def export_schedule_csv(schedules, start_date, roles, role_definitions, weeks_pe
         roles: list of role codes
         role_definitions: dict with role schedules
         weeks_per_block: weeks per block
-        output_path: path to output CSV file
+    
+    Yields:
+        dict with: block_idx, week, abs_week, role, role_name, engineer, 
+                   day_name, event_start, event_end
     """
-    # Map day names to weekday numbers (0=Monday)
-    day_map = {'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4, 'Sat': 5, 'Sun': 6}
-    
-    with open(output_path, 'w', newline='') as f:
-        writer = csv.writer(f)
-        header = ['Week', 'Role', 'Engineer', 'Start DateTime', 'End DateTime']
-        writer.writerow(header)
-        
-        for block_idx, schedule in enumerate(schedules):
-            for week in sorted(schedule.keys()):
-                abs_week = block_idx * weeks_per_block + week + 1
-                week_monday = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
-                
-                for role in roles:
-                    engineer = schedule[week][role]
-                    role_def = role_definitions[role]
-                    role_name = role_def.get('name', role)
-                    schedule_blocks = role_def.get('schedule', [])
-                    
-                    for block in schedule_blocks:
-                        days = block['days']
-                        start_time = block['start_time']
-                        end_time = block['end_time']
-                        span_days = block.get('span_days', 1)
-                        
-                        for day_name in days:
-                            day_offset = day_map[day_name]
-                            event_start_date = week_monday + timedelta(days=day_offset)
-                            
-                            # Parse times
-                            start_hour, start_min = map(int, start_time.split(':'))
-                            end_hour, end_min = map(int, end_time.split(':'))
-                            
-                            # Create start datetime
-                            event_start = event_start_date.replace(hour=start_hour, minute=start_min)
-                            
-                            # Calculate end datetime
-                            if span_days > 1:
-                                event_end = event_start + timedelta(days=span_days, hours=0, minutes=0)
-                                event_end = event_end.replace(hour=end_hour, minute=end_min)
-                            elif end_hour < start_hour or (end_hour == start_hour and end_min < start_min):
-                                event_end = event_start + timedelta(days=1)
-                                event_end = event_end.replace(hour=end_hour, minute=end_min)
-                            else:
-                                event_end = event_start.replace(hour=end_hour, minute=end_min)
-                            
-                            writer.writerow([
-                                abs_week,
-                                role_name,
-                                engineer,
-                                event_start.strftime('%Y-%m-%d %H:%M'),
-                                event_end.strftime('%Y-%m-%d %H:%M')
-                            ])
-    
-    print(f"📄 Schedule exported to {output_path}")
-
-
-def export_schedule_ical(schedules, start_date, roles, role_definitions, timezone='UTC', weeks_per_block=12, output_path='schedule.ics'):
-    """
-    Export schedule to iCal format for calendar import with timed events.
-    
-    Args:
-        schedules: list of schedule dicts (one per block)
-        start_date: datetime object for the first Monday
-        roles: list of role codes
-        role_definitions: dict with role schedules
-        timezone: timezone string
-        weeks_per_block: weeks per block
-        output_path: path to output ICS file
-    """
-    lines = [
-        'BEGIN:VCALENDAR',
-        'VERSION:2.0',
-        'PRODID:-//On-Call Schedule//EN',
-        'CALSCALE:GREGORIAN',
-        'METHOD:PUBLISH',
-        'X-WR-CALNAME:On-Call Schedule',
-        f'X-WR-TIMEZONE:{timezone}',
-    ]
-    
     # Map day names to weekday numbers (0=Monday)
     day_map = {'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4, 'Sat': 5, 'Sun': 6}
     
     for block_idx, schedule in enumerate(schedules):
         for week in sorted(schedule.keys()):
+            abs_week = block_idx * weeks_per_block + week + 1
             week_monday = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
             
             for role in roles:
@@ -379,19 +303,83 @@ def export_schedule_ical(schedules, start_date, roles, role_definitions, timezon
                             # Same day event
                             event_end = event_start.replace(hour=end_hour, minute=end_min)
                         
-                        # Format for iCal (basic format without timezone for now)
-                        start_str = event_start.strftime('%Y%m%dT%H%M%S')
-                        end_str = event_end.strftime('%Y%m%dT%H%M%S')
-                        
-                        lines.extend([
-                            'BEGIN:VEVENT',
-                            f'DTSTART:{start_str}',
-                            f'DTEND:{end_str}',
-                            f'SUMMARY:On-Call: {engineer} ({role_name})',
-                            f'DESCRIPTION:Engineer: {engineer}\\nRole: {role_name}',
-                            f'UID:{block_idx}-{week}-{role}-{day_name}@oncall',
-                            'END:VEVENT',
-                        ])
+                        yield {
+                            'block_idx': block_idx,
+                            'week': week,
+                            'abs_week': abs_week,
+                            'role': role,
+                            'role_name': role_name,
+                            'engineer': engineer,
+                            'day_name': day_name,
+                            'event_start': event_start,
+                            'event_end': event_end
+                        }
+
+
+def export_schedule_csv(schedules, start_date, roles, role_definitions, weeks_per_block=12, output_path='schedule.csv'):
+    """
+    Export schedule to CSV format with detailed time information.
+    
+    Args:
+        schedules: list of schedule dicts (one per block)
+        start_date: datetime object for the first Monday
+        roles: list of role codes
+        role_definitions: dict with role schedules
+        weeks_per_block: weeks per block
+        output_path: path to output CSV file
+    """
+    with open(output_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Week', 'Role', 'Engineer', 'Start DateTime', 'End DateTime'])
+        
+        for event in generate_shift_events(schedules, start_date, roles, role_definitions, weeks_per_block):
+            writer.writerow([
+                event['abs_week'],
+                event['role_name'],
+                event['engineer'],
+                event['event_start'].strftime('%Y-%m-%d %H:%M'),
+                event['event_end'].strftime('%Y-%m-%d %H:%M')
+            ])
+    
+    print(f"📄 Schedule exported to {output_path}")
+
+
+def export_schedule_ical(schedules, start_date, roles, role_definitions, timezone='UTC', weeks_per_block=12, output_path='schedule.ics'):
+    """
+    Export schedule to iCal format for calendar import with timed events.
+    
+    Args:
+        schedules: list of schedule dicts (one per block)
+        start_date: datetime object for the first Monday
+        roles: list of role codes
+        role_definitions: dict with role schedules
+        timezone: timezone string
+        weeks_per_block: weeks per block
+        output_path: path to output ICS file
+    """
+    lines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//On-Call Schedule//EN',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH',
+        'X-WR-CALNAME:On-Call Schedule',
+        f'X-WR-TIMEZONE:{timezone}',
+    ]
+    
+    for event in generate_shift_events(schedules, start_date, roles, role_definitions, weeks_per_block):
+        start_str = event['event_start'].strftime('%Y%m%dT%H%M%S')
+        end_str = event['event_end'].strftime('%Y%m%dT%H%M%S')
+        
+        lines.extend([
+            'BEGIN:VEVENT',
+            f'DTSTART:{start_str}',
+            f'DTEND:{end_str}',
+            f'SUMMARY:On-Call: {event["engineer"]} ({event["role_name"]})',
+            f'DESCRIPTION:Engineer: {event["engineer"]}\\nRole: {event["role_name"]}',
+            f'UID:{event["block_idx"]}-{event["week"]}-{event["role"]}-{event["day_name"]}@oncall',
+            'END:VEVENT',
+        ])
     
     lines.append('END:VCALENDAR')
     
