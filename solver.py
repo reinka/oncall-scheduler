@@ -213,7 +213,89 @@ def generate_on_call_schedule(start_date=None, availability_overrides=None, prin
         return None
 
 
-def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_overrides=None, availability_csv=None):
+def export_schedule_csv(schedules, start_date, output_path='schedule.csv'):
+    """
+    Export schedule to CSV format.
+    
+    Args:
+        schedules: list of schedule dicts (one per block)
+        start_date: datetime object for the first Monday
+        output_path: path to output CSV file
+    """
+    with open(output_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Week', 'Start Date', 'End Date', 'Day', 'Night Primary', 'Night Secondary'])
+        
+        for block_idx, schedule in enumerate(schedules):
+            for week in sorted(schedule.keys()):
+                abs_week = block_idx * 12 + week + 1
+                week_start = start_date + timedelta(weeks=block_idx * 12 + week)
+                week_end = week_start + timedelta(days=6)
+                
+                writer.writerow([
+                    abs_week,
+                    week_start.strftime('%Y-%m-%d'),
+                    week_end.strftime('%Y-%m-%d'),
+                    schedule[week]['D'],
+                    schedule[week]['NP'],
+                    schedule[week]['NS']
+                ])
+    
+    print(f"📄 Schedule exported to {output_path}")
+
+
+def export_schedule_ical(schedules, start_date, output_path='schedule.ics'):
+    """
+    Export schedule to iCal format for calendar import.
+    
+    Args:
+        schedules: list of schedule dicts (one per block)
+        start_date: datetime object for the first Monday
+        output_path: path to output ICS file
+    """
+    lines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//On-Call Schedule//EN',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH',
+        'X-WR-CALNAME:On-Call Schedule',
+        'X-WR-TIMEZONE:UTC',
+    ]
+    
+    role_names = {
+        'D': 'Day Shift',
+        'NP': 'Night Primary',
+        'NS': 'Night Secondary'
+    }
+    
+    for block_idx, schedule in enumerate(schedules):
+        for week in sorted(schedule.keys()):
+            week_start = start_date + timedelta(weeks=block_idx * 12 + week)
+            week_end = week_start + timedelta(days=7)  # +7 for DTEND (exclusive)
+            
+            for role, role_name in role_names.items():
+                engineer = schedule[week][role]
+                
+                lines.extend([
+                    'BEGIN:VEVENT',
+                    f'DTSTART;VALUE=DATE:{week_start.strftime("%Y%m%d")}',
+                    f'DTEND;VALUE=DATE:{week_end.strftime("%Y%m%d")}',
+                    f'SUMMARY:On-Call: {engineer} ({role_name})',
+                    f'DESCRIPTION:Engineer: {engineer}\\nRole: {role_name}',
+                    f'UID:{block_idx}-{week}-{role}@oncall',
+                    'END:VEVENT',
+                ])
+    
+    lines.append('END:VCALENDAR')
+    
+    with open(output_path, 'w') as f:
+        f.write('\r\n'.join(lines))
+    
+    print(f"📅 Schedule exported to {output_path}")
+
+
+def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_overrides=None, availability_csv=None, export_formats=None):
     """
     Generates a multi-block schedule (e.g., 24 weeks = 2 blocks of 12 weeks).
     
@@ -222,6 +304,7 @@ def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_ov
         start_date: datetime object for the first Monday of block 1
         availability_overrides: dict mapping (engineer, block_idx, week) to False
         availability_csv: path to CSV file with unavailability dates
+        export_formats: list of formats to export ['csv', 'ical'], or None for no export
     
     Returns:
         list of schedule dicts, one per block
@@ -277,8 +360,22 @@ def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_ov
                 engineer = schedule[11][role]  # Week 11 is the last week (0-indexed)
                 boundary_constraints[(engineer, 0)] = False  # Block next week 0
     
+    # Export if requested
+    if export_formats and schedules:
+        print(f"\n{'='*60}")
+        print("EXPORTING SCHEDULE")
+        print(f"{'='*60}\n")
+        
+        if 'csv' in export_formats:
+            export_schedule_csv(schedules, start_date)
+        if 'ical' in export_formats:
+            export_schedule_ical(schedules, start_date)
+    
     return schedules
 
 
 if __name__ == '__main__':
-    generate_multi_block_schedule(availability_csv='availability.csv')
+    generate_multi_block_schedule(
+        availability_csv='availability.csv',
+        export_formats=['csv', 'ical']
+    )
