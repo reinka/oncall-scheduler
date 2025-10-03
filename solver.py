@@ -54,7 +54,53 @@ def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2):
     return constraints
 
 
-def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_weekends=1, availability_overrides=None, print_output=True):
+def add_roster_completeness(model, x, engineers, roles, num_weeks):
+    """C1: Each role must be filled exactly once per week."""
+    for w in range(num_weeks):
+        for r in roles:
+            model.AddExactlyOne(x[(e, w, r)] for e in engineers)
+
+
+def add_no_consecutive_weeks(model, x, engineers, roles, num_weeks):
+    """C2: An engineer cannot work in two consecutive weeks."""
+    for e in engineers:
+        for w in range(num_weeks - 1):
+            work_in_week_w = sum(x[(e, w, r)] for r in roles)
+            work_in_week_w1 = sum(x[(e, w + 1, r)] for r in roles)
+            model.Add(work_in_week_w + work_in_week_w1 <= 1)
+
+
+def add_max_workload(model, x, engineers, roles, num_weeks, max_shifts):
+    """C3: Each engineer works at most max_shifts in the period."""
+    for e in engineers:
+        total_shifts = sum(x[(e, w, r)] for w in range(num_weeks) for r in roles)
+        model.Add(total_shifts <= max_shifts)
+
+
+def add_weekend_limit(model, x, engineers, num_weeks, max_weekends):
+    """C4: Each engineer covers at most max_weekends (Night Primary shifts)."""
+    for e in engineers:
+        total_np_shifts = sum(x[(e, w, 'NP')] for w in range(num_weeks))
+        model.Add(total_np_shifts <= max_weekends)
+
+
+def add_role_separation(model, x, engineers, roles, num_weeks):
+    """C5: An engineer holds at most one role per week."""
+    for e in engineers:
+        for w in range(num_weeks):
+            model.Add(sum(x[(e, w, r)] for r in roles) <= 1)
+
+
+def add_availability(model, x, engineers, roles, num_weeks, availability):
+    """C6: An engineer can only be assigned if available."""
+    for e in engineers:
+        for w in range(num_weeks):
+            if not availability[(e, w)]:
+                for r in roles:
+                    model.Add(x[(e, w, r)] == 0)
+
+
+def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_weekends=1, availability_overrides=None, active_rules=None, print_output=True):
     """
     Generates and prints a 12-week on-call schedule.
     
@@ -65,6 +111,7 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
         max_shifts: maximum shifts per engineer in 12 weeks
         max_weekends: maximum weekend shifts (NP) per engineer
         availability_overrides: dict mapping (engineer, week) to False for unavailable weeks
+        active_rules: dict of rule names to bool (which constraints to apply)
         print_output: whether to print the schedule (default: True)
     
     Returns:
@@ -110,45 +157,32 @@ def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_we
     # =================================================================
     # 3. ADDING CONSTRAINTS
     # =================================================================
-
-    # C1: Roster Completeness
-    # Each role must be filled exactly once per week.
-    for w in range(num_weeks):
-        for r in roles:
-            model.AddExactlyOne(x[(e, w, r)] for e in engineers)
-
-    # C2: No Consecutive Weeks
-    # An engineer cannot work in two consecutive weeks.
-    for e in engineers:
-        for w in range(num_weeks - 1):
-            work_in_week_w = sum(x[(e, w, r)] for r in roles)
-            work_in_week_w1 = sum(x[(e, w + 1, r)] for r in roles)
-            model.Add(work_in_week_w + work_in_week_w1 <= 1)
-
-    # C3: Maximum Workload
-    for e in engineers:
-        total_shifts = sum(x[(e, w, r)] for w in range(num_weeks) for r in roles)
-        model.Add(total_shifts <= max_shifts)
-
-    # C4: Weekend Limitation
-    for e in engineers:
-        total_np_shifts = sum(x[(e, w, 'NP')] for w in range(num_weeks))
-        model.Add(total_np_shifts <= max_weekends)
-
-    # C5: Role Separation per Week (Implicit in C1, but good practice)
-    # An engineer holds at most one role per week.
-    for e in engineers:
-        for w in range(num_weeks):
-            model.Add(sum(x[(e, w, r)] for r in roles) <= 1)
-            
-    # C6: Availability
-    # An engineer can only be assigned if available.
-    for e in engineers:
-        for w in range(num_weeks):
-            if not availability[(e, w)]:
-                # If unavailable, they cannot be assigned any role this week.
-                for r in roles:
-                    model.Add(x[(e, w, r)] == 0)
+    
+    # Default: all rules active if not specified
+    if active_rules is None:
+        active_rules = {
+            'roster_completeness': True,
+            'no_consecutive_weeks': True,
+            'max_workload': True,
+            'weekend_limit': True,
+            'role_separation': True,
+            'availability': True
+        }
+    
+    # Rule dispatch table
+    rule_functions = {
+        'roster_completeness': lambda: add_roster_completeness(model, x, engineers, roles, num_weeks),
+        'no_consecutive_weeks': lambda: add_no_consecutive_weeks(model, x, engineers, roles, num_weeks),
+        'max_workload': lambda: add_max_workload(model, x, engineers, roles, num_weeks, max_shifts),
+        'weekend_limit': lambda: add_weekend_limit(model, x, engineers, num_weeks, max_weekends),
+        'role_separation': lambda: add_role_separation(model, x, engineers, roles, num_weeks),
+        'availability': lambda: add_availability(model, x, engineers, roles, num_weeks, availability)
+    }
+    
+    # Apply active rules
+    for rule_name, is_active in active_rules.items():
+        if is_active and rule_name in rule_functions:
+            rule_functions[rule_name]()
 
 
     # =================================================================
@@ -314,6 +348,7 @@ def generate_multi_block_schedule(config):
     max_weekends = config['constraints']['max_weekends_per_engineer']
     availability_csv = config['files']['availability_csv']
     export_formats = config['files']['export_formats']
+    active_rules = config.get('rules', None)  # Optional rules section
     
     availability_overrides = None
     
@@ -353,6 +388,7 @@ def generate_multi_block_schedule(config):
             max_shifts=max_shifts,
             max_weekends=max_weekends,
             availability_overrides=block_availability if block_availability else None,
+            active_rules=active_rules,
             print_output=True
         )
         

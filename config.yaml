@@ -27,6 +27,14 @@ constraints:
   max_shifts_per_engineer: 3
   max_weekends_per_engineer: 1
 
+rules:
+  roster_completeness: true       # C1: Each role filled exactly once per week
+  no_consecutive_weeks: true      # C2: No back-to-back weeks
+  max_workload: true              # C3: Limit total shifts per engineer
+  weekend_limit: true             # C4: Limit weekend shifts per engineer
+  role_separation: true           # C5: One role per person per week
+  availability: true              # C6: Respect unavailability
+
 files:
   availability_csv: "availability.csv"
   export_formats:
