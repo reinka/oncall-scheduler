@@ -1,0 +1,34 @@
+# On-Call Schedule Configuration
+
+team:
+  - Alice
+  - Bob
+  - Charlie
+  - Diana
+  - Ethan
+  - Fiona
+  - George
+  - Hannah
+  - Ian
+  - Julia
+  - Kevin
+  - Laura
+
+schedule:
+  start_date: "2025-11-03"  # First Monday
+  num_blocks: 2              # Number of 12-week blocks
+
+roles:
+  - D    # Day shift
+  - NP   # Night Primary (includes weekend)
+  - NS   # Night Secondary
+
+constraints:
+  max_shifts_per_engineer: 3
+  max_weekends_per_engineer: 1
+
+files:
+  availability_csv: "availability.csv"
+  export_formats:
+    - csv
+    - ical

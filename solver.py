@@ -3,6 +3,13 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import csv
 import os
+import yaml
+
+
+def load_config(config_path='config.yaml'):
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
 
 
 def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2):
@@ -47,12 +54,16 @@ def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2):
     return constraints
 
 
-def generate_on_call_schedule(start_date=None, availability_overrides=None, print_output=True):
+def generate_on_call_schedule(engineers, roles, start_date, max_shifts=3, max_weekends=1, availability_overrides=None, print_output=True):
     """
     Generates and prints a 12-week on-call schedule.
     
     Args:
-        start_date: datetime object for the first Monday (default: Nov 3, 2025)
+        engineers: list of engineer names
+        roles: list of role codes (e.g., ['D', 'NP', 'NS'])
+        start_date: datetime object for the first Monday
+        max_shifts: maximum shifts per engineer in 12 weeks
+        max_weekends: maximum weekend shifts (NP) per engineer
         availability_overrides: dict mapping (engineer, week) to False for unavailable weeks
         print_output: whether to print the schedule (default: True)
     
@@ -62,17 +73,8 @@ def generate_on_call_schedule(start_date=None, availability_overrides=None, prin
     # =================================================================
     # 1. INPUTS
     # =================================================================
-    engineers = [
-        'Alice', 'Bob', 'Charlie', 'Diana', 'Ethan', 'Fiona',
-        'George', 'Hannah', 'Ian', 'Julia', 'Kevin', 'Laura'
-    ]
     num_engineers = len(engineers)
     num_weeks = 12
-    roles = ['D', 'NP', 'NS'] # Day, Night Primary, Night Secondary
-    
-    # Default start date: November 3, 2025 (Monday)
-    if start_date is None:
-        start_date = datetime(2025, 11, 3)
 
     # Availability: True if available, False if not.
     availability = {}
@@ -124,17 +126,14 @@ def generate_on_call_schedule(start_date=None, availability_overrides=None, prin
             model.Add(work_in_week_w + work_in_week_w1 <= 1)
 
     # C3: Maximum Workload
-    # Each engineer works at most 3 shifts in the period.
-    # With T=12, W=12, this will be exactly 3.
     for e in engineers:
         total_shifts = sum(x[(e, w, r)] for w in range(num_weeks) for r in roles)
-        model.Add(total_shifts <= 3)
+        model.Add(total_shifts <= max_shifts)
 
     # C4: Weekend Limitation
-    # Each engineer covers at most 1 weekend (Night Primary).
     for e in engineers:
         total_np_shifts = sum(x[(e, w, 'NP')] for w in range(num_weeks))
-        model.Add(total_np_shifts <= 1)
+        model.Add(total_np_shifts <= max_weekends)
 
     # C5: Role Separation per Week (Implicit in C1, but good practice)
     # An engineer holds at most one role per week.
@@ -204,10 +203,11 @@ def generate_on_call_schedule(start_date=None, availability_overrides=None, prin
             # Count unavailable slots
             unavailable_count = sum(1 for (e, w) in availability if not availability[(e, w)])
             print(f"   - Current unavailable slots: {unavailable_count}")
-            print(f"   - Total capacity with absences: {num_engineers * 3 - unavailable_count} person-shifts")
+            print(f"   - Total capacity: {num_engineers * max_shifts} person-shifts (max)")
             print(f"   - Required capacity: {num_weeks * len(roles)} person-shifts")
+            print(f"   - Note: No-consecutive-weeks constraint further limits capacity")
             
-            if (num_engineers * 3 - unavailable_count) < (num_weeks * len(roles)):
+            if (num_engineers * max_shifts - unavailable_count) < (num_weeks * len(roles)):
                 print("   ⚠️  Insufficient capacity! Need to reduce absences or add engineers.")
         
         return None
@@ -295,22 +295,27 @@ def export_schedule_ical(schedules, start_date, output_path='schedule.ics'):
     print(f"📅 Schedule exported to {output_path}")
 
 
-def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_overrides=None, availability_csv=None, export_formats=None):
+def generate_multi_block_schedule(config):
     """
-    Generates a multi-block schedule (e.g., 24 weeks = 2 blocks of 12 weeks).
+    Generates a multi-block schedule from configuration.
     
     Args:
-        num_blocks: number of 12-week blocks to schedule
-        start_date: datetime object for the first Monday of block 1
-        availability_overrides: dict mapping (engineer, block_idx, week) to False
-        availability_csv: path to CSV file with unavailability dates
-        export_formats: list of formats to export ['csv', 'ical'], or None for no export
+        config: dict with configuration (from YAML/JSON file)
     
     Returns:
         list of schedule dicts, one per block
     """
-    if start_date is None:
-        start_date = datetime(2025, 11, 3)
+    # Extract config values
+    engineers = config['team']
+    roles = config['roles']
+    start_date = datetime.strptime(config['schedule']['start_date'], '%Y-%m-%d')
+    num_blocks = config['schedule']['num_blocks']
+    max_shifts = config['constraints']['max_shifts_per_engineer']
+    max_weekends = config['constraints']['max_weekends_per_engineer']
+    availability_csv = config['files']['availability_csv']
+    export_formats = config['files']['export_formats']
+    
+    availability_overrides = None
     
     # Parse CSV if provided and merge with overrides
     if availability_csv:
@@ -342,7 +347,11 @@ def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_ov
         
         # Generate schedule for this block
         schedule = generate_on_call_schedule(
+            engineers=engineers,
+            roles=roles,
             start_date=block_start,
+            max_shifts=max_shifts,
+            max_weekends=max_weekends,
             availability_overrides=block_availability if block_availability else None,
             print_output=True
         )
@@ -375,7 +384,5 @@ def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_ov
 
 
 if __name__ == '__main__':
-    generate_multi_block_schedule(
-        availability_csv='availability.csv',
-        export_formats=['csv', 'ical']
-    )
+    config = load_config('config.yaml')
+    generate_multi_block_schedule(config)
