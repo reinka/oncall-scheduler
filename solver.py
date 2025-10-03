@@ -2,13 +2,17 @@ from ortools.sat.python import cp_model
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-def generate_on_call_schedule(start_date=None, availability_overrides=None):
+def generate_on_call_schedule(start_date=None, availability_overrides=None, print_output=True):
     """
     Generates and prints a 12-week on-call schedule.
     
     Args:
         start_date: datetime object for the first Monday (default: Nov 3, 2025)
         availability_overrides: dict mapping (engineer, week) to False for unavailable weeks
+        print_output: whether to print the schedule (default: True)
+    
+    Returns:
+        dict: schedule[week][role] = engineer, or None if no solution found
     """
     # =================================================================
     # 1. INPUTS
@@ -112,12 +116,10 @@ def generate_on_call_schedule(start_date=None, availability_overrides=None):
 
 
     # =================================================================
-    # 5. PRINT THE OUTPUT
+    # 5. EXTRACT AND PRINT THE OUTPUT
     # =================================================================
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        print("✅ Feasible schedule found!\n")
-        
-        # Create a schedule data structure for easy printing
+        # Create a schedule data structure
         schedule = {}
         for w in range(num_weeks):
             schedule[w] = {}
@@ -126,35 +128,101 @@ def generate_on_call_schedule(start_date=None, availability_overrides=None):
                     if solver.Value(x[(e, w, r)]) == 1:
                         schedule[w][r] = e
         
-        # Print the formatted schedule
-        header = f"{'Week':<6} | {'Day':<10} | {'Night Primary':<15} | {'Night Secondary':<15}"
-        print(header)
-        print("-" * len(header))
+        if print_output:
+            print("✅ Feasible schedule found!\n")
+            # Print the formatted schedule
+            header = f"{'Week':<6} | {'Day':<10} | {'Night Primary':<15} | {'Night Secondary':<15}"
+            print(header)
+            print("-" * len(header))
+            
+            for w in range(num_weeks):
+                day_eng = schedule[w]['D']
+                np_eng = schedule[w]['NP']
+                ns_eng = schedule[w]['NS']
+                print(f"{(w+1):<6} | {day_eng:<10} | {np_eng:<15} | {ns_eng:<15}")
         
-        for w in range(num_weeks):
-            day_eng = schedule[w]['D']
-            np_eng = schedule[w]['NP']
-            ns_eng = schedule[w]['NS']
-            print(f"{(w+1):<6} | {day_eng:<10} | {np_eng:<15} | {ns_eng:<15}")
+        return schedule
 
     else:
-        print("❌ No feasible schedule found.")
-        print(f"⏱️  Solver time: {solver.WallTime():.3f} seconds")
-        print("\n📋 Possible reasons:")
-        print("   - Too many unavailability constraints (capacity < demand)")
-        print("   - Constraint conflicts (e.g., consecutive week deadlock)")
-        print("   - Try reducing absences or increasing team size")
-        print("\n💡 Suggestions:")
+        if print_output:
+            print("❌ No feasible schedule found.")
+            print(f"⏱️  Solver time: {solver.WallTime():.3f} seconds")
+            print("\n📋 Possible reasons:")
+            print("   - Too many unavailability constraints (capacity < demand)")
+            print("   - Constraint conflicts (e.g., consecutive week deadlock)")
+            print("   - Try reducing absences or increasing team size")
+            print("\n💡 Suggestions:")
+            
+            # Count unavailable slots
+            unavailable_count = sum(1 for (e, w) in availability if not availability[(e, w)])
+            print(f"   - Current unavailable slots: {unavailable_count}")
+            print(f"   - Total capacity with absences: {num_engineers * 3 - unavailable_count} person-shifts")
+            print(f"   - Required capacity: {num_weeks * len(roles)} person-shifts")
+            
+            if (num_engineers * 3 - unavailable_count) < (num_weeks * len(roles)):
+                print("   ⚠️  Insufficient capacity! Need to reduce absences or add engineers.")
         
-        # Count unavailable slots
-        unavailable_count = sum(1 for (e, w) in availability if not availability[(e, w)])
-        print(f"   - Current unavailable slots: {unavailable_count}")
-        print(f"   - Total capacity with absences: {num_engineers * 3 - unavailable_count} person-shifts")
-        print(f"   - Required capacity: {num_weeks * len(roles)} person-shifts")
+        return None
+
+
+def generate_multi_block_schedule(num_blocks=2, start_date=None, availability_overrides=None):
+    """
+    Generates a multi-block schedule (e.g., 24 weeks = 2 blocks of 12 weeks).
+    
+    Args:
+        num_blocks: number of 12-week blocks to schedule
+        start_date: datetime object for the first Monday of block 1
+        availability_overrides: dict mapping (engineer, block_idx, week) to False
+    
+    Returns:
+        list of schedule dicts, one per block
+    """
+    if start_date is None:
+        start_date = datetime(2025, 11, 3)
+    
+    schedules = []
+    boundary_constraints = {}
+    
+    for block_idx in range(num_blocks):
+        print(f"\n{'='*60}")
+        print(f"BLOCK {block_idx + 1} (Weeks {block_idx*12 + 1}-{(block_idx+1)*12})")
+        print(f"{'='*60}\n")
         
-        if (num_engineers * 3 - unavailable_count) < (num_weeks * len(roles)):
-            print("   ⚠️  Insufficient capacity! Need to reduce absences or add engineers.")
+        # Calculate start date for this block
+        block_start = start_date + timedelta(weeks=12 * block_idx)
+        
+        # Merge availability: user overrides + boundary constraints
+        block_availability = {}
+        if availability_overrides:
+            for (e, b, w), available in availability_overrides.items():
+                if b == block_idx:
+                    block_availability[(e, w)] = available
+        
+        # Add boundary constraint from previous block
+        block_availability.update(boundary_constraints)
+        
+        # Generate schedule for this block
+        schedule = generate_on_call_schedule(
+            start_date=block_start,
+            availability_overrides=block_availability if block_availability else None,
+            print_output=True
+        )
+        
+        if schedule is None:
+            print(f"\n❌ Failed to generate schedule for block {block_idx + 1}")
+            return None
+        
+        schedules.append(schedule)
+        
+        # Extract week 11 (last week) engineers for next block's boundary
+        if block_idx < num_blocks - 1:
+            boundary_constraints = {}
+            for role in ['D', 'NP', 'NS']:
+                engineer = schedule[11][role]  # Week 11 is the last week (0-indexed)
+                boundary_constraints[(engineer, 0)] = False  # Block next week 0
+    
+    return schedules
 
 
 if __name__ == '__main__':
-    generate_on_call_schedule()
+    generate_multi_block_schedule()
