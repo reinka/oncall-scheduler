@@ -244,46 +244,85 @@ def generate_on_call_schedule(engineers, roles, start_date, num_weeks=12, max_sh
         return None
 
 
-def export_schedule_csv(schedules, start_date, roles, weeks_per_block=12, output_path='schedule.csv'):
+def export_schedule_csv(schedules, start_date, roles, role_definitions, weeks_per_block=12, output_path='schedule.csv'):
     """
-    Export schedule to CSV format.
+    Export schedule to CSV format with detailed time information.
     
     Args:
         schedules: list of schedule dicts (one per block)
         start_date: datetime object for the first Monday
         roles: list of role codes
+        role_definitions: dict with role schedules
         weeks_per_block: weeks per block
         output_path: path to output CSV file
     """
+    # Map day names to weekday numbers (0=Monday)
+    day_map = {'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4, 'Sat': 5, 'Sun': 6}
+    
     with open(output_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        header = ['Week', 'Start Date', 'End Date'] + roles
+        header = ['Week', 'Role', 'Engineer', 'Start DateTime', 'End DateTime']
         writer.writerow(header)
         
         for block_idx, schedule in enumerate(schedules):
             for week in sorted(schedule.keys()):
                 abs_week = block_idx * weeks_per_block + week + 1
-                week_start = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
-                week_end = week_start + timedelta(days=6)
+                week_monday = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
                 
-                row = [
-                    abs_week,
-                    week_start.strftime('%Y-%m-%d'),
-                    week_end.strftime('%Y-%m-%d')
-                ] + [schedule[week][r] for r in roles]
-                writer.writerow(row)
+                for role in roles:
+                    engineer = schedule[week][role]
+                    role_def = role_definitions[role]
+                    role_name = role_def.get('name', role)
+                    schedule_blocks = role_def.get('schedule', [])
+                    
+                    for block in schedule_blocks:
+                        days = block['days']
+                        start_time = block['start_time']
+                        end_time = block['end_time']
+                        span_days = block.get('span_days', 1)
+                        
+                        for day_name in days:
+                            day_offset = day_map[day_name]
+                            event_start_date = week_monday + timedelta(days=day_offset)
+                            
+                            # Parse times
+                            start_hour, start_min = map(int, start_time.split(':'))
+                            end_hour, end_min = map(int, end_time.split(':'))
+                            
+                            # Create start datetime
+                            event_start = event_start_date.replace(hour=start_hour, minute=start_min)
+                            
+                            # Calculate end datetime
+                            if span_days > 1:
+                                event_end = event_start + timedelta(days=span_days, hours=0, minutes=0)
+                                event_end = event_end.replace(hour=end_hour, minute=end_min)
+                            elif end_hour < start_hour or (end_hour == start_hour and end_min < start_min):
+                                event_end = event_start + timedelta(days=1)
+                                event_end = event_end.replace(hour=end_hour, minute=end_min)
+                            else:
+                                event_end = event_start.replace(hour=end_hour, minute=end_min)
+                            
+                            writer.writerow([
+                                abs_week,
+                                role_name,
+                                engineer,
+                                event_start.strftime('%Y-%m-%d %H:%M'),
+                                event_end.strftime('%Y-%m-%d %H:%M')
+                            ])
     
     print(f"📄 Schedule exported to {output_path}")
 
 
-def export_schedule_ical(schedules, start_date, roles, weeks_per_block=12, output_path='schedule.ics'):
+def export_schedule_ical(schedules, start_date, roles, role_definitions, timezone='UTC', weeks_per_block=12, output_path='schedule.ics'):
     """
-    Export schedule to iCal format for calendar import.
+    Export schedule to iCal format for calendar import with timed events.
     
     Args:
         schedules: list of schedule dicts (one per block)
         start_date: datetime object for the first Monday
         roles: list of role codes
+        role_definitions: dict with role schedules
+        timezone: timezone string
         weeks_per_block: weeks per block
         output_path: path to output ICS file
     """
@@ -294,26 +333,65 @@ def export_schedule_ical(schedules, start_date, roles, weeks_per_block=12, outpu
         'CALSCALE:GREGORIAN',
         'METHOD:PUBLISH',
         'X-WR-CALNAME:On-Call Schedule',
-        'X-WR-TIMEZONE:UTC',
+        f'X-WR-TIMEZONE:{timezone}',
     ]
+    
+    # Map day names to weekday numbers (0=Monday)
+    day_map = {'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4, 'Sat': 5, 'Sun': 6}
     
     for block_idx, schedule in enumerate(schedules):
         for week in sorted(schedule.keys()):
-            week_start = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
-            week_end = week_start + timedelta(days=7)  # +7 for DTEND (exclusive)
+            week_monday = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
             
             for role in roles:
                 engineer = schedule[week][role]
+                role_def = role_definitions[role]
+                role_name = role_def.get('name', role)
+                schedule_blocks = role_def.get('schedule', [])
                 
-                lines.extend([
-                    'BEGIN:VEVENT',
-                    f'DTSTART;VALUE=DATE:{week_start.strftime("%Y%m%d")}',
-                    f'DTEND;VALUE=DATE:{week_end.strftime("%Y%m%d")}',
-                    f'SUMMARY:On-Call: {engineer} ({role})',
-                    f'DESCRIPTION:Engineer: {engineer}\\nRole: {role}',
-                    f'UID:{block_idx}-{week}-{role}@oncall',
-                    'END:VEVENT',
-                ])
+                for block in schedule_blocks:
+                    days = block['days']
+                    start_time = block['start_time']
+                    end_time = block['end_time']
+                    span_days = block.get('span_days', 1)
+                    
+                    for day_name in days:
+                        day_offset = day_map[day_name]
+                        event_start_date = week_monday + timedelta(days=day_offset)
+                        
+                        # Parse times
+                        start_hour, start_min = map(int, start_time.split(':'))
+                        end_hour, end_min = map(int, end_time.split(':'))
+                        
+                        # Create start datetime
+                        event_start = event_start_date.replace(hour=start_hour, minute=start_min)
+                        
+                        # Calculate end datetime
+                        if span_days > 1:
+                            # Multi-day event (e.g., Fri 17:00 -> Mon 09:00)
+                            event_end = event_start + timedelta(days=span_days, hours=0, minutes=0)
+                            event_end = event_end.replace(hour=end_hour, minute=end_min)
+                        elif end_hour < start_hour or (end_hour == start_hour and end_min < start_min):
+                            # Overnight event (e.g., 17:00 -> 09:00 next day)
+                            event_end = event_start + timedelta(days=1)
+                            event_end = event_end.replace(hour=end_hour, minute=end_min)
+                        else:
+                            # Same day event
+                            event_end = event_start.replace(hour=end_hour, minute=end_min)
+                        
+                        # Format for iCal (basic format without timezone for now)
+                        start_str = event_start.strftime('%Y%m%dT%H%M%S')
+                        end_str = event_end.strftime('%Y%m%dT%H%M%S')
+                        
+                        lines.extend([
+                            'BEGIN:VEVENT',
+                            f'DTSTART:{start_str}',
+                            f'DTEND:{end_str}',
+                            f'SUMMARY:On-Call: {engineer} ({role_name})',
+                            f'DESCRIPTION:Engineer: {engineer}\\nRole: {role_name}',
+                            f'UID:{block_idx}-{week}-{role}-{day_name}@oncall',
+                            'END:VEVENT',
+                        ])
     
     lines.append('END:VCALENDAR')
     
@@ -335,10 +413,14 @@ def generate_multi_block_schedule(config):
     """
     # Extract config values
     engineers = config['team']
-    roles = config['roles']
+    roles_config = config['roles']
+    roles = list(roles_config.keys())
+    role_definitions = roles_config
+    
     start_date = datetime.strptime(config['schedule']['start_date'], '%Y-%m-%d')
     num_blocks = config['schedule']['num_blocks']
     weeks_per_block = config['schedule'].get('weeks_per_block', 12)  # Default to 12
+    timezone = config['schedule'].get('timezone', 'UTC')
     max_shifts = config['constraints']['max_shifts_per_engineer']
     max_weekends = config['constraints']['max_weekends_per_engineer']
     weekend_role = config['constraints'].get('weekend_role', 'NP')  # Default to 'NP'
@@ -413,9 +495,9 @@ def generate_multi_block_schedule(config):
         print(f"{'='*60}\n")
         
         if 'csv' in export_formats:
-            export_schedule_csv(schedules, start_date, roles, weeks_per_block)
+            export_schedule_csv(schedules, start_date, roles, role_definitions, weeks_per_block)
         if 'ical' in export_formats:
-            export_schedule_ical(schedules, start_date, roles, weeks_per_block)
+            export_schedule_ical(schedules, start_date, roles, role_definitions, timezone, weeks_per_block)
     
     return schedules
 

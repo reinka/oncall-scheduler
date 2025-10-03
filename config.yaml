@@ -18,11 +18,37 @@ schedule:
   start_date: "2025-11-03"  # First Monday
   num_blocks: 2              # Number of scheduling blocks
   weeks_per_block: 12        # Weeks per block
+  timezone: "UTC"            # Timezone for schedule times
 
 roles:
-  - D    # Day shift
-  - NP   # Night Primary (includes weekend)
-  - NS   # Night Secondary
+  D:
+    name: "Day Shift"
+    schedule:
+      - days: [Mon, Tue, Wed, Thu, Fri]
+        start_time: "09:00"
+        end_time: "17:00"
+  
+  NP:
+    name: "Night Primary"
+    schedule:
+      - days: [Mon, Tue, Wed, Thu]  # Weeknight shifts
+        start_time: "17:00"
+        end_time: "09:00"  # next day
+      - days: [Fri]  # Weekend shift
+        start_time: "17:00"
+        end_time: "09:00"  # Monday morning
+        span_days: 3  # Fri 17:00 -> Mon 09:00
+  
+  NS:
+    name: "Night Secondary"
+    schedule:
+      - days: [Mon, Tue, Wed, Thu]  # Weeknight shifts
+        start_time: "17:00"
+        end_time: "09:00"  # next day
+      - days: [Fri]  # Weekend shift
+        start_time: "17:00"
+        end_time: "09:00"  # Monday morning
+        span_days: 3  # Fri 17:00 -> Mon 09:00
 
 constraints:
   max_shifts_per_engineer: 3
