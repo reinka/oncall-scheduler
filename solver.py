@@ -24,7 +24,7 @@ def parse_availability_csv(csv_path, schedule_start_date, num_blocks=2, weeks_pe
     
     Args:
         csv_path: path to CSV file
-        schedule_start_date: first Monday of the schedule
+        schedule_start_date: first day of the schedule (can be any day of week)
         num_blocks: total number of blocks
         weeks_per_block: weeks per block
     
@@ -111,7 +111,7 @@ def generate_on_call_schedule(engineers, roles, start_date, num_weeks=12, max_sh
     Args:
         engineers: list of engineer names
         roles: list of role codes (e.g., ['D', 'NP', 'NS'])
-        start_date: datetime object for the first Monday
+        start_date: datetime object for first day (can be any day of week)
         num_weeks: number of weeks in the schedule block
         max_shifts: maximum shifts per engineer in the period
         max_weekends: maximum weekend shifts per engineer
@@ -253,7 +253,7 @@ def generate_shift_events(schedules, start_date, roles, role_definitions, weeks_
     
     Args:
         schedules: list of schedule dicts (one per block)
-        start_date: datetime object for the first Monday
+        start_date: datetime object (can be any day of week)
         roles: list of role codes
         role_definitions: dict with role schedules
         weeks_per_block: weeks per block
@@ -262,13 +262,16 @@ def generate_shift_events(schedules, start_date, roles, role_definitions, weeks_
         dict with: block_idx, week, abs_week, role, role_name, engineer, 
                    day_name, event_start, event_end
     """
-    # Map day names to weekday numbers (0=Monday)
+    # Map day names to weekday numbers (0=Monday, 6=Sunday)
     day_map = {'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4, 'Sat': 5, 'Sun': 6}
+    
+    # Calculate what weekday the start_date actually is
+    start_weekday = start_date.weekday()  # 0=Monday, 6=Sunday
     
     for block_idx, schedule in enumerate(schedules):
         for week in sorted(schedule.keys()):
             abs_week = block_idx * weeks_per_block + week + 1
-            week_monday = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
+            week_start = start_date + timedelta(weeks=block_idx * weeks_per_block + week)
             
             for role in roles:
                 engineer = schedule[week][role]
@@ -283,8 +286,12 @@ def generate_shift_events(schedules, start_date, roles, role_definitions, weeks_
                     span_days = block.get('span_days', 1)
                     
                     for day_name in days:
-                        day_offset = day_map[day_name]
-                        event_start_date = week_monday + timedelta(days=day_offset)
+                        # Calculate actual day offset from week start
+                        target_weekday = day_map[day_name]
+                        # How many days forward from week_start to reach target weekday?
+                        # If week starts on Wed (3) and we want Mon (0), that's (0 - 3) % 7 = 4 days forward
+                        day_offset = (target_weekday - start_weekday) % 7
+                        event_start_date = week_start + timedelta(days=day_offset)
                         
                         # Parse times
                         start_hour, start_min = map(int, start_time.split(':'))
@@ -325,7 +332,7 @@ def export_schedule_csv(schedules, start_date, roles, role_definitions, weeks_pe
     
     Args:
         schedules: list of schedule dicts (one per block)
-        start_date: datetime object for the first Monday
+        start_date: datetime object (can be any day of week)
         roles: list of role codes
         role_definitions: dict with role schedules
         weeks_per_block: weeks per block
@@ -353,7 +360,7 @@ def export_schedule_ical(schedules, start_date, roles, role_definitions, timezon
     
     Args:
         schedules: list of schedule dicts (one per block)
-        start_date: datetime object for the first Monday
+        start_date: datetime object (can be any day of week)
         roles: list of role codes
         role_definitions: dict with role schedules
         timezone: timezone string
@@ -472,12 +479,14 @@ def generate_multi_block_schedule(config):
         schedules.append(schedule)
         
         # Extract last week engineers for next block's boundary
+        # Only apply if no_consecutive_weeks rule is active
         if block_idx < num_blocks - 1:
             boundary_constraints = {}
-            last_week = weeks_per_block - 1  # 0-indexed
-            for role in roles:
-                engineer = schedule[last_week][role]
-                boundary_constraints[(engineer, 0)] = False  # Block next week 0
+            if active_rules and active_rules.get('no_consecutive_weeks', True):
+                last_week = weeks_per_block - 1  # 0-indexed
+                for role in roles:
+                    engineer = schedule[last_week][role]
+                    boundary_constraints[(engineer, 0)] = False  # Block next week 0
     
     # Export if requested
     if export_formats and schedules:
@@ -494,5 +503,5 @@ def generate_multi_block_schedule(config):
 
 
 if __name__ == '__main__':
-    config = load_config('config.yaml')
+    config = load_config('example_config.yaml')
     generate_multi_block_schedule(config)
