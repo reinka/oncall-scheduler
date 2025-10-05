@@ -77,67 +77,44 @@ The day names in the config always refer to actual calendar days, not offsets.
 </details>
 
 ```yaml
-# Team members
+# Test config: Schedule starting on Wednesday
 team:
   - Alice
   - Bob
   - Charlie
-  # ... add all your engineers
 
-# Scheduling parameters
 schedule:
-  start_date: "2025-11-03"  # Can be any day of the week
-  num_blocks: 2              # Number of scheduling blocks
-  weeks_per_block: 12        # Weeks per block (configurable)
+  start_date: "2025-11-05"  # Wednesday
+  num_blocks: 1
+  weeks_per_block: 2
   timezone: "UTC"
 
-# Role definitions with actual shift times
 roles:
   D:
     name: "Day Shift"
     schedule:
-      - days: [Mon, Tue, Wed, Thu, Fri]
+      - days: [Mon, Tue, Wed]
         start_time: "09:00"
         end_time: "17:00"
-  
-  NP:
-    name: "Night Primary"
-    schedule:
-      - days: [Mon, Tue, Wed, Thu]  # Weeknights
-        start_time: "17:00"
-        end_time: "09:00"
-      - days: [Fri]  # Weekend shift
-        start_time: "17:00"
-        end_time: "09:00"
-        span_days: 3  # Fri 17:00 → Mon 09:00
-  
-  NS:
-    name: "Night Secondary"
-    schedule:
-      # Same as NP
 
-# Constraints
 constraints:
-  max_shifts_per_engineer: 3   # Per block
+  max_shifts_per_engineer: 2
   max_weekends_per_engineer: 1
-  weekend_role: NP             # Which role includes weekends
+  weekend_role: D
 
-# Rule toggles (enable/disable constraints)
 rules:
-  roster_completeness: true    # All roles must be filled
-  no_consecutive_weeks: true   # No back-to-back weeks
-  max_workload: true           # Enforce max_shifts limit
-  weekend_limit: true          # Enforce weekend limit
-  role_separation: true        # One role per person per week
-  availability: true           # Respect unavailability
+  roster_completeness: true
+  no_consecutive_weeks: true
+  max_workload: true
+  weekend_limit: false
+  role_separation: true
+  availability: false
 
-# Solver settings
 solver:
-  timeout_seconds: 60
+  timeout_seconds: 10
 
-# Output configuration
 files:
-  availability_csv: "availability.csv"
+  availability_csv: "none.csv"
   export_formats:
     - csv
     - ical
