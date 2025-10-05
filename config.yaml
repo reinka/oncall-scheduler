@@ -15,9 +15,9 @@ team:
   - Laura
 
 schedule:
-  start_date: "2025-11-03"  # First Monday
+  start_date: "2025-11-03"  # Can be any day of the week
   num_blocks: 2              # Number of scheduling blocks
-  weeks_per_block: 12        # Weeks per block
+  weeks_per_block: 12        # Weeks per block (configurable)
   timezone: "UTC"            # Timezone for schedule times
 
 roles:

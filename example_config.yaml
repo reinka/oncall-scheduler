@@ -1,0 +1,41 @@
+# Test config: Schedule starting on Wednesday
+team:
+  - Alice
+  - Bob
+  - Charlie
+
+schedule:
+  start_date: "2025-11-05"  # Wednesday
+  num_blocks: 1
+  weeks_per_block: 2
+  timezone: "UTC"
+
+roles:
+  D:
+    name: "Day Shift"
+    schedule:
+      - days: [Mon, Tue, Wed]
+        start_time: "09:00"
+        end_time: "17:00"
+
+constraints:
+  max_shifts_per_engineer: 2
+  max_weekends_per_engineer: 1
+  weekend_role: D
+
+rules:
+  roster_completeness: true
+  no_consecutive_weeks: true
+  max_workload: true
+  weekend_limit: false
+  role_separation: true
+  availability: false
+
+solver:
+  timeout_seconds: 10
+
+files:
+  availability_csv: "none.csv"
+  export_formats:
+    - csv
+    - ical
